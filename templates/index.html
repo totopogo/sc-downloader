@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>SC Downloader</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet"/>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root{
+  --bg:#07070f;
+  --surface:#0e0e1c;
+  --card:#131321;
+  --border:#1c1c2e;
+  --orange:#ff5500;
+  --amber:#ff8800;
+  --green:#2ecc71;
+  --red:#e74c3c;
+  --blue:#4f8cff;
+  --text:#e6e6f0;
+  --muted:#4a4a65;
+  --mono:'DM Mono',monospace;
+  --display:'Bebas Neue',sans-serif;
+}
+
+html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--mono)}
+
+/* ── Animated background ── */
+body::after{
+  content:'';position:fixed;inset:0;
+  background:
+    radial-gradient(ellipse 60% 50% at 80% 10%, rgba(255,85,0,.07) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 10% 80%, rgba(79,140,255,.06) 0%, transparent 60%);
+  pointer-events:none;z-index:0;
+}
+
+.shell{
+  min-height:100vh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;
+  padding:40px 20px 60px;position:relative;z-index:1;
+}
+
+/* ── Logo ── */
+.logo{
+  display:flex;align-items:center;gap:16px;
+  margin-bottom:6px;
+  animation:fadeDown .5s ease both;
+}
+
+.logo-icon{
+  width:54px;height:54px;border-radius:16px;
+  background:var(--orange);
+  display:flex;align-items:center;justify-content:center;font-size:26px;
+  box-shadow:0 0 40px rgba(255,85,0,.4);
+}
+
+.logo-text{
+  font-family:var(--display);font-size:50px;letter-spacing:5px;line-height:1;
+  background:linear-gradient(120deg,#fff 20%,var(--orange) 100%);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+}
+
+.tagline{
+  font-size:10px;letter-spacing:3px;color:var(--muted);
+  text-transform:uppercase;margin-bottom:44px;
+  animation:fadeDown .5s .08s ease both;
+}
+
+/* ── Card ── */
+.card{
+  width:100%;max-width:580px;
+  background:var(--card);border:1px solid var(--border);
+  border-radius:22px;padding:34px 34px 28px;
+  box-shadow:0 40px 100px rgba(0,0,0,.6);
+  animation:fadeUp .6s .12s ease both;
+}
+
+.lbl{font-size:9px;letter-spacing:3px;color:var(--muted);text-transform:uppercase;margin-bottom:6px}
+
+/* ── Input ── */
+.inp-wrap{position:relative;margin-bottom:22px}
+.inp-icon{position:absolute;left:14px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+
+input[type=text]{
+  width:100%;background:var(--surface);border:1px solid var(--border);
+  border-radius:11px;color:var(--text);font-family:var(--mono);font-size:13px;
+  padding:13px 14px 13px 42px;outline:none;
+  transition:border-color .18s,box-shadow .18s;
+}
+input[type=text]:focus{border-color:var(--orange);box-shadow:0 0 0 3px rgba(255,85,0,.13)}
+input[type=text]::placeholder{color:var(--muted)}
+
+/* ── Quality pills ── */
+.quality-row{display:flex;gap:8px;margin-bottom:24px;flex-wrap:wrap}
+.pill{
+  padding:7px 16px;border-radius:30px;font-family:var(--mono);font-size:11px;
+  letter-spacing:1px;border:1px solid var(--border);background:var(--surface);
+  color:var(--muted);cursor:pointer;transition:all .15s;
+}
+.pill:hover{border-color:var(--orange);color:var(--orange)}
+.pill.active{background:var(--orange);border-color:var(--orange);color:#fff;box-shadow:0 0 16px rgba(255,85,0,.35)}
+
+/* ── Button ── */
+.btn-main{
+  width:100%;background:var(--orange);color:#fff;border:none;
+  border-radius:11px;font-family:var(--mono);font-size:14px;
+  letter-spacing:2px;text-transform:uppercase;padding:16px;
+  cursor:pointer;margin-bottom:26px;
+  box-shadow:0 8px 30px rgba(255,85,0,.3);
+  transition:all .18s;
+}
+.btn-main:hover:not(:disabled){background:var(--amber);transform:translateY(-1px);box-shadow:0 12px 40px rgba(255,85,0,.45)}
+.btn-main:disabled{opacity:.4;cursor:not-allowed;transform:none}
+
+/* ── Progress ── */
+.prog-wrap{margin-bottom:20px;display:none}
+.prog-wrap.show{display:block}
+.prog-head{display:flex;justify-content:space-between;font-size:10px;color:var(--muted);margin-bottom:7px}
+.prog-track{height:3px;background:var(--surface);border-radius:3px;overflow:hidden}
+.prog-fill{height:100%;background:linear-gradient(90deg,var(--orange),var(--amber));border-radius:3px;transition:width .35s ease;width:0%;box-shadow:0 0 8px rgba(255,85,0,.5)}
+
+/* ── Download button (appears when done) ── */
+.btn-dl{
+  width:100%;background:var(--green);color:#fff;border:none;
+  border-radius:11px;font-family:var(--mono);font-size:14px;
+  letter-spacing:2px;text-transform:uppercase;padding:16px;
+  cursor:pointer;margin-bottom:26px;display:none;
+  box-shadow:0 8px 30px rgba(46,204,113,.3);
+  transition:all .18s;animation:pop .4s ease;
+}
+.btn-dl:hover{background:#27ae60;transform:translateY(-1px)}
+.btn-dl.show{display:block}
+
+/* ── Log ── */
+.log-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--muted);margin-right:7px;vertical-align:middle}
+.dot.running{background:var(--orange);animation:blink 1s ease-in-out infinite}
+.dot.done{background:var(--green)}
+.dot.error{background:var(--red)}
+.btn-clear{background:none;border:none;font-family:var(--mono);font-size:9px;letter-spacing:1px;color:var(--muted);cursor:pointer;text-transform:uppercase}
+.btn-clear:hover{color:var(--orange)}
+
+.logbox{
+  background:var(--surface);border:1px solid var(--border);border-radius:11px;
+  height:200px;overflow-y:auto;padding:13px 15px;font-size:11.5px;line-height:1.85;
+  scrollbar-width:thin;scrollbar-color:var(--border) transparent;
+}
+.logbox::-webkit-scrollbar{width:3px}
+.logbox::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+
+.ll{display:block}
+.ll.info{color:var(--text)}
+.ll.muted{color:var(--muted)}
+.ll.accent{color:var(--orange)}
+.ll.success{color:var(--green)}
+.ll.error{color:var(--red)}
+
+/* ── Footer ── */
+.footer{margin-top:26px;font-size:10px;color:var(--muted);letter-spacing:1.5px;text-align:center;animation:fadeUp .6s .25s ease both}
+
+/* ── Animations ── */
+@keyframes fadeDown{from{opacity:0;transform:translateY(-14px)}to{opacity:1;transform:none}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.3}}
+@keyframes pop{0%{transform:scale(.95);opacity:0}100%{transform:scale(1);opacity:1}}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <div class="logo">
+    <div class="logo-icon">🎵</div>
+    <div class="logo-text">SC Downloader</div>
+  </div>
+  <div class="tagline">SoundCloud Playlist → MP3 ZIP · For the homies only</div>
+
+  <div class="card">
+
+    <!-- URL -->
+    <div class="lbl">Playlist or Track URL</div>
+    <div class="inp-wrap">
+      <svg class="inp-icon" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71"/></svg>
+      <input id="url" type="text" placeholder="https://soundcloud.com/user/sets/your-playlist"/>
+    </div>
+
+    <!-- Quality -->
+    <div class="lbl">Quality</div>
+    <div class="quality-row">
+      <div class="pill active" data-q="320">320 kbps</div>
+      <div class="pill" data-q="256">256 kbps</div>
+      <div class="pill" data-q="128">128 kbps</div>
+    </div>
+
+    <!-- Download trigger -->
+    <button class="btn-main" id="dlBtn" onclick="startDownload()">⬇ &nbsp;Download Playlist</button>
+
+    <!-- ZIP download (appears when ready) -->
+    <button class="btn-dl" id="zipBtn">📦 &nbsp;Save ZIP to my Computer</button>
+
+    <!-- Progress -->
+    <div class="prog-wrap" id="progWrap">
+      <div class="prog-head">
+        <span id="progLabel">Downloading…</span>
+        <span id="progCount">0 / 0</span>
+      </div>
+      <div class="prog-track"><div class="prog-fill" id="progFill"></div></div>
+    </div>
+
+    <!-- Log -->
+    <div class="log-head">
+      <div class="lbl" style="margin:0"><span class="dot" id="dot"></span>Activity Log</div>
+      <button class="btn-clear" onclick="clearLog()">Clear</button>
+    </div>
+    <div class="logbox" id="log"></div>
+
+  </div>
+
+  <div class="footer">For personal use only &nbsp;·&nbsp; Powered by yt-dlp + ffmpeg</div>
+
+</div>
+<script>
+  let jobId = null, poll = null, lastCount = 0, quality = "320";
+
+  // Quality pills
+  document.querySelectorAll(".pill").forEach(p => {
+    p.onclick = () => {
+      document.querySelectorAll(".pill").forEach(x => x.classList.remove("active"));
+      p.classList.add("active");
+      quality = p.dataset.q;
+    };
+  });
+
+  function log(msg, kind="info"){
+    const b = document.getElementById("log");
+    const s = document.createElement("span");
+    s.className = `ll ${kind}`; s.textContent = msg;
+    b.appendChild(s); b.appendChild(document.createElement("br"));
+    b.scrollTop = b.scrollHeight;
+  }
+
+  function clearLog(){ document.getElementById("log").innerHTML = ""; }
+
+  function setDot(state){
+    const d = document.getElementById("dot");
+    d.className = `dot ${state}`;
+  }
+
+  async function startDownload(){
+    const url = document.getElementById("url").value.trim();
+    if(!url){ log("✗  Please enter a SoundCloud URL.", "error"); return; }
+    if(!url.includes("soundcloud.com")){ log("✗  Doesn't look like a SoundCloud URL.", "error"); return; }
+
+    clearLog();
+    lastCount = 0;
+    document.getElementById("dlBtn").disabled = true;
+    document.getElementById("zipBtn").classList.remove("show");
+    document.getElementById("progWrap").classList.remove("show");
+    document.getElementById("progFill").style.width = "0%";
+    setDot("running");
+
+    try{
+      const res  = await fetch("/api/download", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ url, quality }),
+      });
+      const data = await res.json();
+      if(data.error){ log("✗  " + data.error, "error"); reset(); return; }
+      jobId = data.job_id;
+      log(`▶  Job started`, "accent");
+      poll  = setInterval(pollStatus, 900);
+    } catch(e){
+      log("✗  Cannot reach server. Is it running?", "error"); reset();
+    }
+  }
+
+  async function pollStatus(){
+    if(!jobId) return;
+    try{
+      const res  = await fetch(`/api/status/${jobId}`);
+      const data = await res.json();
+
+      // New log lines
+      data.logs.slice(lastCount).forEach(l => log(l.msg, l.kind));
+      lastCount = data.logs.length;
+
+      // Progress bar
+      if(data.total > 0){
+        document.getElementById("progWrap").classList.add("show");
+        const pct = Math.round((data.done / data.total) * 100);
+        document.getElementById("progFill").style.width = pct + "%";
+        document.getElementById("progCount").textContent = `${data.done} / ${data.total}`;
+      }
+
+      if(data.status === "done"){
+        setDot("done");
+        document.getElementById("progLabel").textContent = "Complete!";
+        document.getElementById("progFill").style.width = "100%";
+        clearInterval(poll);
+        reset(false);
+        // Show ZIP download button
+        const btn = document.getElementById("zipBtn");
+        btn.classList.add("show");
+        btn.onclick = () => { window.location = `/api/zip/${jobId}`; };
+      } else if(data.status === "error"){
+        setDot("error"); clearInterval(poll); reset(false);
+      }
+    } catch(_){}
+  }
+
+  function reset(clearDot=true){
+    document.getElementById("dlBtn").disabled = false;
+    if(clearDot) setDot("");
+  }
+
+  // Init log
+  log("  Welcome! Paste a SoundCloud playlist URL above.", "muted");
+  log("  All tracks will be zipped and downloaded to your browser.", "muted");
+  log("─".repeat(44), "muted");
+</script>
+</body>
+</html>
