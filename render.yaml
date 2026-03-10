@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: sc-downloader
+    runtime: python
+    buildCommand: "apt-get install -y ffmpeg && pip install -r requirements.txt"
+    startCommand: "gunicorn app:app --timeout 300 --workers 2"
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0

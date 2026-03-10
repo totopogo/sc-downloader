@@ -3,39 +3,8 @@ SC Downloader - Flask backend
 Downloads a SoundCloud playlist and streams a ZIP back to the browser.
 """
 
-import os, uuid, zipfile, threading, tempfile, shutil, subprocess, sys
+import os, uuid, zipfile, threading, tempfile, shutil
 from flask import Flask, request, jsonify, send_file, render_template
-
-# ── Install ffmpeg at startup if missing ──────────────────────────────────────
-def ensure_ffmpeg():
-    try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        print("ffmpeg already available in PATH")
-        return
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        pass
-
-    print("Installing imageio-ffmpeg...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "imageio-ffmpeg", "-q"])
-    import imageio_ffmpeg
-    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-    ffmpeg_dir  = os.path.dirname(ffmpeg_path)
-
-    # Create ffprobe symlink pointing to same binary
-    ffprobe_path = os.path.join(ffmpeg_dir, "ffprobe")
-    if not os.path.exists(ffprobe_path):
-        try:
-            os.symlink(ffmpeg_path, ffprobe_path)
-            print(f"ffprobe symlinked at {ffprobe_path}")
-        except Exception as e:
-            print(f"ffprobe symlink failed: {e}")
-
-    # Add ffmpeg dir to PATH so yt-dlp finds it automatically
-    os.environ["PATH"] = ffmpeg_dir + ":" + os.environ.get("PATH", "")
-    print(f"ffmpeg ready at {ffmpeg_path}")
-    print(f"PATH updated: {ffmpeg_dir} added")
-
-ensure_ffmpeg()
 
 try:
     import yt_dlp
@@ -117,14 +86,6 @@ def _worker(job_id, url, tmp):
     log("Fetching playlist info...", "accent")
 
     try:
-        # Get ffmpeg path from imageio
-        ffmpeg_loc = None
-        try:
-            import imageio_ffmpeg
-            ffmpeg_loc = imageio_ffmpeg.get_ffmpeg_exe()
-        except Exception:
-            pass
-
         # Probe playlist
         probe_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
@@ -142,7 +103,6 @@ def _worker(job_id, url, tmp):
             log(f"   {i:02d}. {title}", "muted")
         log("-" * 46, "muted")
 
-        # Download options
         ydl_opts = {
             "format":         "bestaudio/best",
             "outtmpl":        os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
@@ -158,16 +118,10 @@ def _worker(job_id, url, tmp):
             "logger":         _Logger(job_id),
         }
 
-        # Pass ffmpeg directory so yt-dlp finds both ffmpeg and ffprobe
-        if ffmpeg_loc:
-            ffmpeg_dir = os.path.dirname(ffmpeg_loc)
-            ydl_opts["ffmpeg_location"] = ffmpeg_dir
-            log(f"   ffmpeg dir: {ffmpeg_dir}", "muted")
-
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Zip all mp3s
+        # Zip
         log("Zipping files...", "accent")
         zip_path  = tmp + ".zip"
         mp3_files = [f for f in os.listdir(tmp) if f.endswith(".mp3")]
@@ -180,7 +134,7 @@ def _worker(job_id, url, tmp):
         job["zip"]    = zip_path
         job["status"] = "done"
         log("-" * 46, "muted")
-        log(f"Done! {len(mp3_files)} downloaded, {skipped} skipped (unavailable).", "success")
+        log(f"Done! {len(mp3_files)} downloaded, {skipped} skipped (unavailable on SoundCloud).", "success")
 
     except Exception as e:
         job["status"] = "error"
