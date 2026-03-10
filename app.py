@@ -3,8 +3,33 @@ SC Downloader - Flask backend
 Downloads a SoundCloud playlist and streams a ZIP back to the browser.
 """
 
-import os, uuid, zipfile, threading, tempfile, shutil, traceback
+import os, uuid, zipfile, threading, tempfile, shutil, subprocess, sys
 from flask import Flask, request, jsonify, send_file, render_template
+
+# ── Install ffmpeg at startup if missing ──────────────────────────────────────
+def ensure_ffmpeg():
+    try:
+        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
+        print("ffmpeg already available")
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("ffmpeg not found, installing via imageio-ffmpeg...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "imageio-ffmpeg", "-q"])
+        import imageio_ffmpeg
+        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+        # Symlink or add to PATH
+        bin_dir = "/usr/local/bin"
+        try:
+            if not os.path.exists(f"{bin_dir}/ffmpeg"):
+                os.symlink(ffmpeg_path, f"{bin_dir}/ffmpeg")
+            if not os.path.exists(f"{bin_dir}/ffprobe"):
+                os.symlink(ffmpeg_path, f"{bin_dir}/ffprobe")
+            print(f"ffmpeg symlinked to {bin_dir}")
+        except Exception as e:
+            print(f"Symlink failed: {e}, adding to PATH instead")
+            os.environ["PATH"] = os.path.dirname(ffmpeg_path) + ":" + os.environ["PATH"]
+        print("ffmpeg ready via imageio-ffmpeg")
+
+ensure_ffmpeg()
 
 try:
     import yt_dlp
@@ -13,7 +38,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-jobs = {}  # job_id -> { status, logs, total, done, folder, zip }
+jobs = {}
 
 
 @app.route("/")
@@ -87,7 +112,15 @@ def _worker(job_id, url, tmp):
     log("Fetching playlist info...", "accent")
 
     try:
-        # Probe to get track list
+        # Get ffmpeg path
+        ffmpeg_loc = None
+        try:
+            import imageio_ffmpeg
+            ffmpeg_loc = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            pass
+
+        # Probe
         probe_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -99,13 +132,12 @@ def _worker(job_id, url, tmp):
         log(f"   Found {total} track(s)", "muted")
         log("-" * 46, "muted")
 
-        # Log each track name upfront
         for i, e in enumerate(entries, 1):
-            title = e.get("title") or e.get("url") or f"Track {i}"
+            title = e.get("title") or f"Track {i}"
             log(f"   {i:02d}. {title}", "muted")
         log("-" * 46, "muted")
 
-        # Download
+        # Build ydl options
         ydl_opts = {
             "format":         "bestaudio/best",
             "outtmpl":        os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
@@ -120,6 +152,10 @@ def _worker(job_id, url, tmp):
             "progress_hooks": [lambda d: _hook(job_id, d)],
             "logger":         _Logger(job_id),
         }
+
+        if ffmpeg_loc:
+            ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_loc)
+            log(f"   ffmpeg: {ffmpeg_loc}", "muted")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
