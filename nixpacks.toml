@@ -1,8 +1,2 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "python311"]
-
-[phases.install]
-cmds = ["pip install -r requirements.txt"]
-
-[start]
-cmd = "gunicorn app:app --timeout 300 --workers 2 --bind 0.0.0.0:$PORT"
+nixPkgs = ["ffmpeg"]
