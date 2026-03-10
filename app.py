@@ -10,24 +10,30 @@ from flask import Flask, request, jsonify, send_file, render_template
 def ensure_ffmpeg():
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        print("ffmpeg already available")
+        print("ffmpeg already available in PATH")
+        return
     except (subprocess.CalledProcessError, FileNotFoundError):
-        print("ffmpeg not found, installing via imageio-ffmpeg...")
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "imageio-ffmpeg", "-q"])
-        import imageio_ffmpeg
-        ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-        # Symlink or add to PATH
-        bin_dir = "/usr/local/bin"
+        pass
+
+    print("Installing imageio-ffmpeg...")
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "imageio-ffmpeg", "-q"])
+    import imageio_ffmpeg
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+    ffmpeg_dir  = os.path.dirname(ffmpeg_path)
+
+    # Create ffprobe symlink pointing to same binary
+    ffprobe_path = os.path.join(ffmpeg_dir, "ffprobe")
+    if not os.path.exists(ffprobe_path):
         try:
-            if not os.path.exists(f"{bin_dir}/ffmpeg"):
-                os.symlink(ffmpeg_path, f"{bin_dir}/ffmpeg")
-            if not os.path.exists(f"{bin_dir}/ffprobe"):
-                os.symlink(ffmpeg_path, f"{bin_dir}/ffprobe")
-            print(f"ffmpeg symlinked to {bin_dir}")
+            os.symlink(ffmpeg_path, ffprobe_path)
+            print(f"ffprobe symlinked at {ffprobe_path}")
         except Exception as e:
-            print(f"Symlink failed: {e}, adding to PATH instead")
-            os.environ["PATH"] = os.path.dirname(ffmpeg_path) + ":" + os.environ["PATH"]
-        print("ffmpeg ready via imageio-ffmpeg")
+            print(f"ffprobe symlink failed: {e}")
+
+    # Add ffmpeg dir to PATH so yt-dlp finds it automatically
+    os.environ["PATH"] = ffmpeg_dir + ":" + os.environ.get("PATH", "")
+    print(f"ffmpeg ready at {ffmpeg_path}")
+    print(f"PATH updated: {ffmpeg_dir} added")
 
 ensure_ffmpeg()
 
@@ -37,7 +43,6 @@ except ImportError:
     yt_dlp = None
 
 app = Flask(__name__)
-
 jobs = {}
 
 
@@ -112,7 +117,7 @@ def _worker(job_id, url, tmp):
     log("Fetching playlist info...", "accent")
 
     try:
-        # Get ffmpeg path
+        # Get ffmpeg path from imageio
         ffmpeg_loc = None
         try:
             import imageio_ffmpeg
@@ -120,7 +125,7 @@ def _worker(job_id, url, tmp):
         except Exception:
             pass
 
-        # Probe
+        # Probe playlist
         probe_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -137,7 +142,7 @@ def _worker(job_id, url, tmp):
             log(f"   {i:02d}. {title}", "muted")
         log("-" * 46, "muted")
 
-        # Build ydl options
+        # Download options
         ydl_opts = {
             "format":         "bestaudio/best",
             "outtmpl":        os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
@@ -153,14 +158,16 @@ def _worker(job_id, url, tmp):
             "logger":         _Logger(job_id),
         }
 
+        # Pass ffmpeg directory so yt-dlp finds both ffmpeg and ffprobe
         if ffmpeg_loc:
-            ydl_opts["ffmpeg_location"] = os.path.dirname(ffmpeg_loc)
-            log(f"   ffmpeg: {ffmpeg_loc}", "muted")
+            ffmpeg_dir = os.path.dirname(ffmpeg_loc)
+            ydl_opts["ffmpeg_location"] = ffmpeg_dir
+            log(f"   ffmpeg dir: {ffmpeg_dir}", "muted")
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Zip
+        # Zip all mp3s
         log("Zipping files...", "accent")
         zip_path  = tmp + ".zip"
         mp3_files = [f for f in os.listdir(tmp) if f.endswith(".mp3")]
@@ -203,7 +210,7 @@ class _Logger:
     def warning(self, msg):
         job = jobs.get(self.job_id)
         if job:
-            job["logs"].append({"msg": f"! Skipped: {msg[:80]}", "kind": "accent"})
+            job["logs"].append({"msg": f"! {msg[:80]}", "kind": "accent"})
 
     def error(self, msg):
         job = jobs.get(self.job_id)
