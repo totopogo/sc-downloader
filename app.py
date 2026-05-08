@@ -13,11 +13,9 @@ except ImportError:
 
 app = Flask(__name__)
 
-# ── In-memory job store ───────────────────────────────────────────────────────
 jobs: dict = {}
 
 
-# ── yt-dlp logger ─────────────────────────────────────────────────────────────
 class _YTLogger:
     def __init__(self, job_id):
         self.job_id = job_id
@@ -35,13 +33,11 @@ class _YTLogger:
             jobs[self.job_id]["logs"].append({"msg": f"✗ {msg}", "kind": "error"})
 
 
-# ── Pages ─────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
-# ── Start download job ─────────────────────────────────────────────────────────
 @app.route("/api/download", methods=["POST"])
 def start_download():
     if yt_dlp is None:
@@ -76,7 +72,6 @@ def start_download():
     return jsonify({"job_id": job_id})
 
 
-# ── Poll status ────────────────────────────────────────────────────────────────
 @app.route("/api/status/<job_id>")
 def status(job_id):
     job = jobs.get(job_id)
@@ -90,7 +85,6 @@ def status(job_id):
     })
 
 
-# ── Download the ZIP ───────────────────────────────────────────────────────────
 @app.route("/api/zip/<job_id>")
 def download_zip(job_id):
     job = jobs.get(job_id)
@@ -118,7 +112,6 @@ def download_zip(job_id):
     return response
 
 
-# ── Worker thread ──────────────────────────────────────────────────────────────
 def _worker(job_id: str, url: str, tmp: str, quality: str):
     job = jobs[job_id]
 
@@ -128,7 +121,7 @@ def _worker(job_id: str, url: str, tmp: str, quality: str):
     log("▶  Fetching info…", "accent")
 
     try:
-        # ── 1. Probe to get track count ────────────────────────────────────
+        # ── 1. Probe ──────────────────────────────────────────────────────
         probe_opts = {
             "quiet":        True,
             "no_warnings":  True,
@@ -151,32 +144,44 @@ def _worker(job_id: str, url: str, tmp: str, quality: str):
         log(f"   Found {total} track(s)", "muted")
         log("─" * 46, "muted")
 
-        # ── 2. Download all tracks ─────────────────────────────────────────
+        # ── 2. Download — avoid HLS, use http progressive streams ─────────
         ydl_opts = {
-            "format":         "bestaudio/best",
-            "outtmpl":        os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
+            # Prefer non-HLS progressive http formats only
+            "format": "http/bestaudio/best",
+            "outtmpl": os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
             "postprocessors": [{
                 "key":              "FFmpegExtractAudio",
                 "preferredcodec":   "mp3",
                 "preferredquality": quality,
             }],
-            "ignoreerrors":   True,
-            "quiet":          False,
-            "no_warnings":    False,
-            "progress_hooks": [lambda d: _hook(job_id, d)],
-            "logger":         _YTLogger(job_id),
+            "ignoreerrors":         True,
+            "quiet":                False,
+            "no_warnings":          False,
+            "progress_hooks":       [lambda d: _hook(job_id, d)],
+            "logger":               _YTLogger(job_id),
+            # Spoof browser headers so SoundCloud doesn't block the server
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Referer":    "https://soundcloud.com/",
+                "Origin":     "https://soundcloud.com",
+            },
+            # Retry aggressively
+            "retries":        10,
+            "fragment_retries": 10,
+            "sleep_interval": 2,
+            "max_sleep_interval": 5,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # ── 3. Zip everything ──────────────────────────────────────────────
+        # ── 3. Zip ────────────────────────────────────────────────────────
         log("📦  Zipping files…", "accent")
         zip_path  = tmp + ".zip"
         mp3_files = sorted(f for f in os.listdir(tmp) if f.endswith(".mp3"))
 
         if not mp3_files:
-            raise Exception("No MP3 files were downloaded. The URL may be private or invalid.")
+            raise Exception("No MP3 files were downloaded. SoundCloud may be blocking this server's IP.")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for fname in mp3_files:
@@ -205,7 +210,6 @@ def _hook(job_id: str, d: dict):
         job["logs"].append({"msg": f"✓  {name}", "kind": "success"})
 
 
-# ── Run ────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
