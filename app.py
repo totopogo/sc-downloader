@@ -1,5 +1,5 @@
 """
-SC Downloader - Flask backend
+SC Downloader — Flask backend
 Downloads a SoundCloud playlist and streams a ZIP back to the browser.
 """
 
@@ -12,21 +12,29 @@ except ImportError:
     yt_dlp = None
 
 app = Flask(__name__)
-jobs = {}
+
+# ── In-memory job store ───────────────────────────────────────────────────────
+jobs: dict = {}   # job_id -> { status, logs, total, done, folder, zip }
 
 
+# ── Pages ─────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
+# ── Start download job ─────────────────────────────────────────────────────────
 @app.route("/api/download", methods=["POST"])
 def start_download():
     if yt_dlp is None:
         return jsonify({"error": "yt-dlp not installed on server."}), 500
 
-    data = request.get_json(force=True)
-    url  = (data.get("url") or "").strip()
+    data    = request.get_json(force=True)
+    url     = (data.get("url") or "").strip()
+    quality = str(data.get("quality") or "320")
+
+    if quality not in ("128", "256", "320"):
+        quality = "320"
 
     if not url or "soundcloud.com" not in url:
         return jsonify({"error": "Invalid SoundCloud URL."}), 400
@@ -42,10 +50,15 @@ def start_download():
         "zip":    None,
     }
 
-    threading.Thread(target=_worker, args=(job_id, url, tmp), daemon=True).start()
+    threading.Thread(
+        target=_worker,
+        args=(job_id, url, tmp, quality),
+        daemon=True,
+    ).start()
     return jsonify({"job_id": job_id})
 
 
+# ── Poll status ────────────────────────────────────────────────────────────────
 @app.route("/api/status/<job_id>")
 def status(job_id):
     job = jobs.get(job_id)
@@ -59,6 +72,7 @@ def status(job_id):
     })
 
 
+# ── Download the ZIP ───────────────────────────────────────────────────────────
 @app.route("/api/zip/<job_id>")
 def download_zip(job_id):
     job = jobs.get(job_id)
@@ -69,81 +83,101 @@ def download_zip(job_id):
     if not os.path.exists(zip_path):
         return jsonify({"error": "ZIP file missing"}), 404
 
-    return send_file(
+    def cleanup():
+        try:
+            os.remove(zip_path)
+        except Exception:
+            pass
+        jobs.pop(job_id, None)
+
+    response = send_file(
         zip_path,
         mimetype="application/zip",
         as_attachment=True,
         download_name="soundcloud_playlist.zip",
     )
+    # Clean up after response is sent
+    threading.Thread(target=cleanup, daemon=True).start()
+    return response
 
 
-def _worker(job_id, url, tmp):
+# ── Worker thread ──────────────────────────────────────────────────────────────
+def _worker(job_id: str, url: str, tmp: str, quality: str):
     job = jobs[job_id]
 
     def log(msg, kind="info"):
         job["logs"].append({"msg": msg, "kind": kind})
 
-    log("Fetching playlist info...", "accent")
+    log("▶  Fetching info…", "accent")
 
     try:
-        # Probe playlist
-        probe_opts = {"quiet": True, "no_warnings": True, "extract_flat": True}
+        # ── 1. Probe to get track count ────────────────────────────────────
+        probe_opts = {
+            "quiet":        True,
+            "no_warnings":  True,
+            "extract_flat": True,
+        }
         with yt_dlp.YoutubeDL(probe_opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        entries = info.get("entries", [info]) if info else []
-        entries = [e for e in entries if e]
-        total   = len(entries)
+        if not info:
+            raise Exception("Could not fetch info from SoundCloud. Check the URL.")
+
+        # Handle both single tracks and playlists
+        entries = info.get("entries")
+        if entries:
+            entries = [e for e in entries if e]
+        else:
+            entries = [info]
+
+        total        = len(entries)
         job["total"] = total
         log(f"   Found {total} track(s)", "muted")
-        log("-" * 46, "muted")
+        log("─" * 46, "muted")
 
-        for i, e in enumerate(entries, 1):
-            title = e.get("title") or f"Track {i}"
-            log(f"   {i:02d}. {title}", "muted")
-        log("-" * 46, "muted")
-
+        # ── 2. Download all tracks ─────────────────────────────────────────
         ydl_opts = {
             "format":         "bestaudio/best",
             "outtmpl":        os.path.join(tmp, "%(playlist_index)02d - %(title)s.%(ext)s"),
             "postprocessors": [{
                 "key":              "FFmpegExtractAudio",
                 "preferredcodec":   "mp3",
-                "preferredquality": "320",
+                "preferredquality": quality,
             }],
             "ignoreerrors":   True,
             "quiet":          True,
             "no_warnings":    True,
             "progress_hooks": [lambda d: _hook(job_id, d)],
-            "logger":         _Logger(job_id),
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
 
-        # Zip
-        log("Zipping files...", "accent")
+        # ── 3. Zip everything ──────────────────────────────────────────────
+        log("📦  Zipping files…", "accent")
         zip_path  = tmp + ".zip"
-        mp3_files = [f for f in os.listdir(tmp) if f.endswith(".mp3")]
+        mp3_files = sorted(f for f in os.listdir(tmp) if f.endswith(".mp3"))
+
+        if not mp3_files:
+            raise Exception("No MP3 files were downloaded. The URL may be private or invalid.")
 
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for fname in sorted(mp3_files):
+            for fname in mp3_files:
                 zf.write(os.path.join(tmp, fname), fname)
 
-        skipped = total - len(mp3_files)
         job["zip"]    = zip_path
         job["status"] = "done"
-        log("-" * 46, "muted")
-        log(f"Done! {len(mp3_files)} downloaded, {skipped} skipped (unavailable on SoundCloud).", "success")
+        log("─" * 46, "muted")
+        log(f"✓  Done! {len(mp3_files)} track(s) ready to download.", "success")
 
     except Exception as e:
         job["status"] = "error"
-        log(f"Error: {e}", "error")
+        log(f"✗  {e}", "error")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-def _hook(job_id, d):
+def _hook(job_id: str, d: dict):
     job = jobs.get(job_id)
     if not job:
         return
@@ -151,27 +185,10 @@ def _hook(job_id, d):
         fname = os.path.basename(d.get("filename", "?"))
         name  = os.path.splitext(fname)[0]
         job["done"] += 1
-        job["logs"].append({"msg": f"+ {name}", "kind": "success"})
+        job["logs"].append({"msg": f"✓  {name}", "kind": "success"})
 
 
-class _Logger:
-    def __init__(self, job_id):
-        self.job_id = job_id
-
-    def debug(self, msg): pass
-    def info(self, msg):  pass
-
-    def warning(self, msg):
-        job = jobs.get(self.job_id)
-        if job:
-            job["logs"].append({"msg": f"! {msg[:80]}", "kind": "accent"})
-
-    def error(self, msg):
-        job = jobs.get(self.job_id)
-        if job:
-            job["logs"].append({"msg": f"x {msg[:100]}", "kind": "error"})
-
-
+# ── Run ────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
