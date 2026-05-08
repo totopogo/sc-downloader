@@ -14,7 +14,25 @@ except ImportError:
 app = Flask(__name__)
 
 # ── In-memory job store ───────────────────────────────────────────────────────
-jobs: dict = {}   # job_id -> { status, logs, total, done, folder, zip }
+jobs: dict = {}
+
+
+# ── yt-dlp logger ─────────────────────────────────────────────────────────────
+class _YTLogger:
+    def __init__(self, job_id):
+        self.job_id = job_id
+
+    def debug(self, msg):
+        if self.job_id in jobs:
+            jobs[self.job_id]["logs"].append({"msg": msg, "kind": "muted"})
+
+    def warning(self, msg):
+        if self.job_id in jobs:
+            jobs[self.job_id]["logs"].append({"msg": f"⚠ {msg}", "kind": "accent"})
+
+    def error(self, msg):
+        if self.job_id in jobs:
+            jobs[self.job_id]["logs"].append({"msg": f"✗ {msg}", "kind": "error"})
 
 
 # ── Pages ─────────────────────────────────────────────────────────────────────
@@ -96,7 +114,6 @@ def download_zip(job_id):
         as_attachment=True,
         download_name="soundcloud_playlist.zip",
     )
-    # Clean up after response is sent
     threading.Thread(target=cleanup, daemon=True).start()
     return response
 
@@ -123,7 +140,6 @@ def _worker(job_id: str, url: str, tmp: str, quality: str):
         if not info:
             raise Exception("Could not fetch info from SoundCloud. Check the URL.")
 
-        # Handle both single tracks and playlists
         entries = info.get("entries")
         if entries:
             entries = [e for e in entries if e]
@@ -145,9 +161,10 @@ def _worker(job_id: str, url: str, tmp: str, quality: str):
                 "preferredquality": quality,
             }],
             "ignoreerrors":   True,
-            "quiet":          True,
-            "no_warnings":    True,
+            "quiet":          False,
+            "no_warnings":    False,
             "progress_hooks": [lambda d: _hook(job_id, d)],
+            "logger":         _YTLogger(job_id),
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
